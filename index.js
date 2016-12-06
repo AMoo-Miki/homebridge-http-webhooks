@@ -11,6 +11,7 @@ module.exports = function(homebridge) {
     homebridge.registerPlatform("homebridge-http-webhooks", "HttpWebHooks", HttpWebHooksPlatform);
     homebridge.registerAccessory("homebridge-http-webhooks", "HttpWebHookSensor", HttpWebHookSensorAccessory);
     homebridge.registerAccessory("homebridge-http-webhooks", "HttpWebHookSwitch", HttpWebHookSwitchAccessory);
+    homebridge.registerAccessory("homebridge-http-webhooks", "HttpWebHookDoor", HttpWebHookDoorAccessory);
 };
 
 function HttpWebHooksPlatform(log, config){
@@ -19,6 +20,7 @@ function HttpWebHooksPlatform(log, config){
     this.webhookPort = config["webhook_port"] || 51828;
     this.sensors = config["sensors"] || [];
     this.switches = config["switches"] || [];
+    this.doors = config["doors"] || [];
     this.storage = require('node-persist');
     this.storage.initSync({dir:this.cacheDirectory});
 }
@@ -26,16 +28,23 @@ function HttpWebHooksPlatform(log, config){
 HttpWebHooksPlatform.prototype = {
 
     accessories: function(callback) {
-        var accessories = [];
-        for(var i = 0; i < this.sensors.length; i++){
+        var accessories = [],
+            i;
+        for(i = 0; i < this.sensors.length; i++){
             var sensor = new HttpWebHookSensorAccessory(this.log, this.sensors[i], this.storage);
             accessories.push(sensor);
         }
 
-        for(var i = 0; i < this.switches.length; i++){
+        for(i = 0; i < this.switches.length; i++){
             var switchAccessory = new HttpWebHookSwitchAccessory(this.log, this.switches[i], this.storage);
             accessories.push(switchAccessory);
         }
+
+        for(i = 0; i < this.doors.length; i++){
+            var doorAccessory = new HttpWebHookDoorAccessory(this.log, this.doors[i], this.storage);
+            accessories.push(doorAccessory);
+        }
+
         var accessoriesCount = accessories.length;
 
         callback(accessories);
@@ -230,4 +239,183 @@ HttpWebHookSwitchAccessory.prototype.setState = function(powerOn, callback) {
 
 HttpWebHookSwitchAccessory.prototype.getServices = function() {
   return [this.service];
+};
+
+function HttpWebHookDoorAccessory(log, doorConfig, storage) {
+    this.log = log;
+    this.id = doorConfig["id"];
+    this.name = doorConfig["name"];
+    this.openURL = doorConfig["open_url"] || "";
+    this.closeURL = doorConfig["close_url"] || "";
+    this.type = doorConfig["type"];
+    this.reverse = doorConfig["reverse"] ? 1 : 0;
+    this.duration = parseInt(doorConfig["duration"]);
+    this.storage = storage;
+
+    if (!this.duration || !isFinite(this.duration)) this.duration = 15000;
+
+    if (this.type === "garage") {
+        this.service = new Service.GarageDoorOpener(this.name);
+        this.writeState = function(newState) {
+            var intState = newState ? 1 : 0,
+                isClosed = intState !== this.reverse;
+
+            this.service.getCharacteristic(Characteristic.CurrentDoorState)
+                .setValue(isClosed ? Characteristic.CurrentDoorState.CLOSED : Characteristic.CurrentDoorState.OPEN, undefined, 'fromHTTPWebhooks');
+
+            this.service.getCharacteristic(Characteristic.TargetDoorState)
+                .updateValue(isClosed ? Characteristic.TargetDoorState.CLOSED : Characteristic.TargetDoorState.OPEN, undefined, 'fromHTTPWebhooks');
+
+            this.storage.setItemSync("http-webhook-"+this.id, newState);
+        };
+        this.changeHandler = (function(newState) {
+            var currentState = this.service.getCharacteristic(Characteristic.CurrentDoorState).value;
+            if ((this.reverse && currentState === Characteristic.CurrentDoorState.CLOSING) ||
+                (!this.reverse && currentState === Characteristic.CurrentDoorState.OPENING)) {
+                this.log("Record HomeKit state for garage door to '%s'.", newState);
+                this.storage.setItemSync("http-webhook-"+this.id, newState);
+                return;
+            }
+
+            this.log("Change HomeKit state for garage door to '%s'.", newState);
+
+            this.writeState(newState);
+        }).bind(this);
+
+        this.service.getCharacteristic(Characteristic.CurrentDoorState)
+            .on('get', this.getState.bind(this));
+        this.service.getCharacteristic(Characteristic.TargetDoorState)
+            .on('get', this.getState.bind(this))
+            .on('set', this.setState.bind(this));
+    } else {
+        this.service = new Service.Door(this.name);
+        this.writeState = function(newState) {
+            var intState = newState ? 1 : 0,
+                isClosed = intState !== this.reverse;
+
+            this.service.getCharacteristic(Characteristic.CurrentPosition)
+                .setValue(isClosed ? 0 : 100, undefined, 'fromHTTPWebhooks');
+
+            this.service.getCharacteristic(Characteristic.TargetPosition)
+                .updateValue(isClosed ? 0 : 100, undefined, 'fromHTTPWebhooks');
+
+            this.storage.setItemSync("http-webhook-"+this.id, newState);
+        };
+        this.changeHandler = (function(newState) {
+            var currentState = this.service.getCharacteristic(Characteristic.PositionState).value;
+            if ((this.reverse && currentState === Characteristic.PositionState.DECREASING) || (!this.reverse && currentState === Characteristic.PositionState.INCREASING)) return;
+
+            this.log("Change HomeKit state for door to '%s'.", newState);
+
+            this.writeState(newState);
+        }).bind(this);
+
+        this.service.getCharacteristic(Characteristic.CurrentPosition)
+            .on('get', this.getState.bind(this));
+        this.service.getCharacteristic(Characteristic.TargetPosition)
+            .on('get', this.getState.bind(this))
+            .on('set', this.setState.bind(this));
+    }
+}
+
+HttpWebHookDoorAccessory.prototype.getState = function(callback) {
+    this.log("Getting current state for '%s'...", this.id);
+
+    var state = this.storage.getItemSync("http-webhook-"+this.id),
+        intState = state ? 1 : 0;
+
+    this.log("        current state is", state);
+    if(this.type === "garage") {
+        callback(null, intState === this.reverse ? Characteristic.CurrentDoorState.OPEN : Characteristic.CurrentDoorState.CLOSED);
+    }
+    else {
+        callback(null, intState === this.reverse ? 100 : 0);
+    }
+};
+
+HttpWebHookDoorAccessory.prototype.setState = function(state, callback) {
+    this.log("Switch state for '%s' to '%s'...", this.id, state);
+
+    var currentState,
+        isClosed;
+
+    if(this.type === "garage") {
+        currentState = this.service.getCharacteristic(Characteristic.CurrentDoorState).value;
+        if (currentState === Characteristic.CurrentDoorState.CLOSING || currentState === Characteristic.CurrentDoorState.OPENING) return;
+
+        isClosed = currentState === Characteristic.CurrentDoorState.CLOSED;
+        if ((isClosed && state === Characteristic.TargetDoorState.CLOSED) || (!isClosed && state == Characteristic.TargetDoorState.OPEN)) return callback(null);
+    } else {
+        currentState = this.service.getCharacteristic(Characteristic.PositionState).value;
+        if (currentState === Characteristic.PositionState.INCREASING || currentState === Characteristic.PositionState.DECREASING) return;
+
+        isClosed = currentState === 0;
+        if ((isClosed && state === 0) || (!isClosed && state == 100)) return callback();
+    }
+
+    var urlToCall = this.openURL;
+    if(state) {
+        urlToCall = this.closeURL;
+    }
+    if(urlToCall !== "") {
+        request.get({
+            url: urlToCall,
+            timeout: DEFAULT_REQUEST_TIMEOUT
+        }, (function(err, response, body) {
+            var statusCode = response && response.statusCode ? response.statusCode: -1;
+            this.log("Request to '%s' finished with status code '%s' and body '%s'.", urlToCall, statusCode, body, err);
+            if (!err && statusCode == 200) {
+                this.storage.setItemSync("http-webhook-"+this.id, state);
+
+                try {
+                    var res = JSON.parse(body);
+                    if (res.hasOwnProperty('success')) {
+                        var deferCallback = false;
+                        if (res.success) {
+
+                            if (this.type === "garage") {
+                                this.service.getCharacteristic(Characteristic.CurrentDoorState)
+                                    .setValue(isClosed ? Characteristic.CurrentDoorState.OPENING : Characteristic.CurrentDoorState.CLOSING, undefined, 'fromHTTPWebhooks');
+                            } else {
+                                this.service.getCharacteristic(Characteristic.PositionState)
+                                    .setValue(isClosed ? Characteristic.PositionState.INCREASING : Characteristic.PositionState.DECREASING, undefined, 'fromHTTPWebhooks');
+                            }
+
+                            if ((!isClosed ? 1 : 0) === this.reverse) {
+                                this.log('Got to manually update end state in %dms', this.duration / 1000);
+                                deferCallback = true;
+
+                                setTimeout(function() {
+                                    var state = this.storage.getItemSync("http-webhook-"+this.id);
+                                    if (isClosed !== state) {
+                                        this.service.getCharacteristic(Characteristic.CurrentDoorState)
+                                            .setValue(Characteristic.CurrentDoorState.STOPPED, undefined, 'fromHTTPWebhooks');
+                                        callback();
+                                        setTimeout(function() {
+                                            this.writeState(state);
+                                        }.bind(this), 1000);
+                                    } else {
+                                        this.writeState(state);
+                                        callback();
+                                    }
+                                }.bind(this), this.duration);
+                            }
+
+                        } else {
+                            this.writeState(res.status);
+                        }
+                        return deferCallback ? null : callback();
+                    }
+                } catch (ex) {
+                    this.log(ex);
+                }
+            }
+
+            callback(err || new Error("Request to '"+url+"' was not succesful."));
+        }).bind(this));
+    }
+};
+
+HttpWebHookDoorAccessory.prototype.getServices = function() {
+    return [this.service];
 };
