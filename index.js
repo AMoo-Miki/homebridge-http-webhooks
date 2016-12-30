@@ -247,6 +247,7 @@ function HttpWebHookDoorAccessory(log, doorConfig, storage) {
     this.name = doorConfig["name"];
     this.openURL = doorConfig["open_url"] || "";
     this.closeURL = doorConfig["close_url"] || "";
+    this.stateURL = doorConfig["state_url"] || "";
     this.type = doorConfig["type"];
     this.reverse = doorConfig["reverse"] ? 1 : 0;
     this.duration = parseInt(doorConfig["duration"]);
@@ -315,6 +316,27 @@ function HttpWebHookDoorAccessory(log, doorConfig, storage) {
         this.service.getCharacteristic(Characteristic.TargetPosition)
             .on('get', this.getState.bind(this))
             .on('set', this.setState.bind(this));
+    }
+
+    if (this.stateURL) {
+        this.log("Getting state of '%s'...", this.id);
+        request.get({
+            url: this.stateURL,
+            timeout: DEFAULT_REQUEST_TIMEOUT
+        }, (function(err, response, body) {
+            var statusCode = response && response.statusCode ? response.statusCode: -1;
+            this.log("Request to '%s' finished with status code '%s' and body '%s'.", this.stateURL, statusCode, body, err);
+            if (!err && statusCode == 200) {
+                try {
+                    var res = JSON.parse(body);
+                    if (res.hasOwnProperty('success')) {
+                        this.storage.setItemSync("http-webhook-"+this.id, res.status);
+                    }
+                } catch (ex) {
+                    this.log(ex);
+                }
+            }
+        }).bind(this));
     }
 }
 
