@@ -1,3 +1,21 @@
+## 0.0.24
+
+Bugfix:
+
+  - Push buttons without url do now switch state back correctly.
+
+## 0.0.23
+
+New features:
+
+  - Added push buttons. The button will be released automatically.
+
+## 0.0.22
+
+Bugfix:
+
+  - Switches without on or off url do now switch state correctly.
+
 ## 0.0.21
 
 New features:
@@ -9,7 +27,7 @@ New features:
 New features:
 
   - Added occupancy sensor (thanks to wr).
-  
+
 ## 0.0.19
 
 Bugfix:
@@ -87,7 +105,7 @@ Bugfix:
 Bugfix:
 
   - Added missing dot.
-  
+
 ## 0.0.6
 
 New features:
@@ -99,25 +117,25 @@ New features:
 Bugfix:
 
   - Fix another copy and paste error.
-  
+
 ## 0.0.4
 
 Bugfix:
 
   - Fix copy and paste error.
-  
+
 ## 0.0.3
 
 Bugfix:
 
   - Fix context.
-  
+
 ## 0.0.2
 
 Bugfix:
 
   - Removed unexpected ';'.
-  
+
 ## 0.0.1
 
 Initial release version.
