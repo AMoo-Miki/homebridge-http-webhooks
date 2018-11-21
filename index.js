@@ -234,11 +234,13 @@ HttpWebHookSwitchAccessory.prototype.setState = function(powerOn, callback) {
         }, (function(err, response, body) {
             var statusCode = response && response.statusCode ? response.statusCode : -1;
             this.log("Request to '%s' finished with status code '%s' and body '%s'.", url, statusCode, body, err);
-            if (!err && statusCode == 200) {
-                callback(null);
-            }
-            else {
-                callback(err || new Error("Request to '" + url + "' was not succesful."));
+
+            callback();
+
+            if (err || statusCode !== 200) {
+                process.nextTick(() => {
+                    this.service.getCharacteristic(Characteristic.On).updateValue(new Error('Unreachable'));
+                });
             }
         }).bind(this));
     }
@@ -446,7 +448,11 @@ HttpWebHookDoorAccessory.prototype.setState = function(state, callback) {
                 }
             }
 
-            callback(err || new Error("Request to '" + url + "' was not succesful."));
+            if (err || statusCode !== 200) {
+                process.nextTick(() => {
+                    currentState.updateValue(new Error('Unreachable'));
+                });
+            }
         }).bind(this));
     }
 };
